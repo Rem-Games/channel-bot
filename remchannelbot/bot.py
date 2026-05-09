@@ -77,7 +77,8 @@ class RemChannelBot(commands.Bot):
             if changes:
                 self.store.update_guild(guild.id, state)
                 setattr(self, last_key, now)
-                await send_command_channel_notice(guild, state, "\n".join(changes))
+                if not state.quiet_mode:
+                    await send_command_channel_notice(guild, state, "\n".join(changes))
 
     @rotation_loop.before_loop
     async def before_rotation_loop(self) -> None:
@@ -171,11 +172,22 @@ class RemChannelGroup(app_commands.Group):
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message(f"Rotation mode set to `{mode.value}`.")
 
+    @app_commands.command(name="quiet", description="Toggle scheduled rotation notices")
+    @app_commands.describe(enabled="True suppresses scheduled rotation messages; false sends them")
+    @app_commands.default_permissions(administrator=True)
+    async def quiet(self, interaction: discord.Interaction, enabled: bool) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        state.quiet_mode = enabled
+        self.bot.store.update_guild(interaction.guild_id, state)
+        mode = "enabled" if state.quiet_mode else "disabled"
+        await interaction.response.send_message(f"Quiet mode {mode}.")
+
     @app_commands.command(name="rotation-list", description="List channels in the rotation")
     @app_commands.default_permissions(administrator=True)
     async def rotation_list(self, interaction: discord.Interaction) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        lines = [f"Mode: `{state.rotation_mode}`"]
+        quiet = "enabled" if state.quiet_mode else "disabled"
+        lines = [f"Mode: `{state.rotation_mode}`", f"Quiet mode: `{quiet}`"]
         for channel_id in state.rotation_channel_ids:
             channel = interaction.guild.get_channel(channel_id)
             name = channel.name if channel else "missing"

@@ -69,6 +69,7 @@ After setup, all operational commands must be run in that command channel.
 - `/remchannel setup command-channel` - choose the channel used for bot commands and bot responses.
 - `/remchannel interval minutes` - set the rotation interval.
 - `/remchannel mode mode` - switch between one-channel rotation and all-channel rotation.
+- `/remchannel quiet enabled` - toggle scheduled rotation notices after setup/testing.
 - `/remchannel rotation-add channel` - add a channel to the rotation.
 - `/remchannel rotation-remove channel` - remove a channel from the rotation by channel, ID, or unique current name.
 - `/remchannel rotation-list` - list configured channels with current names and IDs.
@@ -82,6 +83,8 @@ After setup, all operational commands must be run in that command channel.
 Discord requires the bot to have `Manage Channels` to rename guild channels. Discord also rate-limits API calls; this bot rotates one channel per interval and enforces a minimum interval of 10 minutes.
 
 The default rotation mode updates one configured channel per interval. All-channel mode attempts to update every configured channel each interval. In either mode, the bot will not rename a channel to a candidate name already used by another configured rotation channel.
+
+Quiet mode suppresses scheduled rotation messages in the configured command channel. Manual commands still respond so admins can see command results.
 
 ## Linux systemd Service
 

@@ -21,6 +21,7 @@ class StateTests(unittest.TestCase):
 
         self.assertEqual(state.interval_minutes, DEFAULT_INTERVAL_MINUTES)
         self.assertEqual(state.rotation_mode, ROTATION_MODE_ONE)
+        self.assertFalse(state.quiet_mode)
         self.assertEqual(state.rotation_channel_ids, [])
         self.assertEqual(state.candidate_names, [])
 

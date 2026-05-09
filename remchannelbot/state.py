@@ -20,6 +20,7 @@ class GuildState:
     candidate_names: list[str] = field(default_factory=list)
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES
     rotation_mode: str = ROTATION_MODE_ONE
+    quiet_mode: bool = False
     next_rotation_index: int = 0
     next_candidate_index: int = 0
 
@@ -33,6 +34,7 @@ class GuildState:
             candidate_names=[str(value) for value in payload.get("candidate_names", [])],
             interval_minutes=max(interval, MIN_INTERVAL_MINUTES),
             rotation_mode=rotation_mode,
+            quiet_mode=bool(payload.get("quiet_mode", False)),
             next_rotation_index=int(payload.get("next_rotation_index", 0)),
             next_candidate_index=int(payload.get("next_candidate_index", 0)),
         )
