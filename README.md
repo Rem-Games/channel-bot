@@ -46,6 +46,8 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m remchannelbot
 ```
 
+Python 3.13 and newer require the `audioop-lts` compatibility package, which is included in `requirements.txt`.
+
 ## First Use
 
 After inviting the bot, run:
