@@ -54,3 +54,47 @@ After setup, all operational commands must be run in that command channel.
 ## Notes
 
 Discord requires the bot to have `Manage Channels` to rename guild channels. Discord also rate-limits API calls; this bot rotates one channel per interval and enforces a minimum interval of 10 minutes.
+
+## Linux systemd Service
+
+Create `.env`, create a Linux `.venv`, and install `requirements.txt` first. Then install the service:
+
+```bash
+scripts/linux/install-systemd.sh
+sudo systemctl start remchannelbot
+sudo systemctl status remchannelbot
+```
+
+Useful commands:
+
+```bash
+sudo systemctl stop remchannelbot
+sudo systemctl restart remchannelbot
+sudo journalctl -u remchannelbot -f
+```
+
+To remove it:
+
+```bash
+scripts/linux/uninstall-systemd.sh
+```
+
+## Windows Service
+
+Windows needs a service wrapper because Python console apps do not implement the Windows Service Control Manager protocol directly. These scripts use NSSM.
+
+Install NSSM, create `.env`, create a Windows `.venv`, and install `requirements.txt` first. A virtual environment created on Linux/WSL will not run as a native Windows service. Then run PowerShell as Administrator:
+
+```powershell
+.\scripts\windows\install-service.ps1
+.\scripts\windows\start-service.ps1
+Get-Service RemChannelBot
+```
+
+Useful commands:
+
+```powershell
+.\scripts\windows\stop-service.ps1
+.\scripts\windows\start-service.ps1
+.\scripts\windows\uninstall-service.ps1
+```
