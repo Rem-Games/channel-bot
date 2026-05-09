@@ -1,0 +1,2 @@
+"""Rem Channel Bot package."""
+
