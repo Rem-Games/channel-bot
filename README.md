@@ -22,6 +22,10 @@ Discord's bot guide starts at https://docs.discord.com/developers/platform/bots 
 
 Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN`. `DISCORD_GUILD_ID` is optional, but recommended while developing because guild command sync is immediate for that server. `.env` contains secrets and should never be committed.
 
+`DISCORD_GUILD_ID` only controls where slash commands are synced quickly. It does not change how runtime settings are stored. Runtime bot settings are stored per Discord server ID, so one server's command channel, rotation channels, candidate names, interval, and rotation mode do not apply to another server.
+
+If you want the same bot application to be usable in multiple servers, leave `DISCORD_GUILD_ID` blank and use global command sync. Global slash commands can take longer to appear or update in Discord.
+
 `.venv` is different from `.env`. `.venv` is a generated Python virtual environment directory that contains Python executables and installed packages. It is OS-specific:
 
 - Linux/WSL uses `.venv/bin/python`
@@ -64,6 +68,7 @@ After setup, all operational commands must be run in that command channel.
 
 - `/remchannel setup command-channel` - choose the channel used for bot commands and bot responses.
 - `/remchannel interval minutes` - set the rotation interval.
+- `/remchannel mode mode` - switch between one-channel rotation and all-channel rotation.
 - `/remchannel rotation-add channel` - add a channel to the rotation.
 - `/remchannel rotation-remove channel` - remove a channel from the rotation by channel, ID, or unique current name.
 - `/remchannel rotation-list` - list configured channels with current names and IDs.
@@ -75,6 +80,8 @@ After setup, all operational commands must be run in that command channel.
 ## Notes
 
 Discord requires the bot to have `Manage Channels` to rename guild channels. Discord also rate-limits API calls; this bot rotates one channel per interval and enforces a minimum interval of 10 minutes.
+
+The default rotation mode updates one configured channel per interval. All-channel mode attempts to update every configured channel each interval. In either mode, the bot will not rename a channel to a candidate name already used by another configured rotation channel.
 
 ## Linux systemd Service
 

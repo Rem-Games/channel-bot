@@ -8,6 +8,9 @@ from typing import Any
 
 MIN_INTERVAL_MINUTES = 10
 DEFAULT_INTERVAL_MINUTES = 60
+ROTATION_MODE_ONE = "one"
+ROTATION_MODE_ALL = "all"
+ROTATION_MODES = {ROTATION_MODE_ONE, ROTATION_MODE_ALL}
 
 
 @dataclass
@@ -16,17 +19,20 @@ class GuildState:
     rotation_channel_ids: list[int] = field(default_factory=list)
     candidate_names: list[str] = field(default_factory=list)
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES
+    rotation_mode: str = ROTATION_MODE_ONE
     next_rotation_index: int = 0
     next_candidate_index: int = 0
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> GuildState:
         interval = int(payload.get("interval_minutes", DEFAULT_INTERVAL_MINUTES))
+        rotation_mode = str(payload.get("rotation_mode", ROTATION_MODE_ONE))
         return cls(
             command_channel_id=_optional_int(payload.get("command_channel_id")),
             rotation_channel_ids=[int(value) for value in payload.get("rotation_channel_ids", [])],
             candidate_names=[str(value) for value in payload.get("candidate_names", [])],
             interval_minutes=max(interval, MIN_INTERVAL_MINUTES),
+            rotation_mode=rotation_mode,
             next_rotation_index=int(payload.get("next_rotation_index", 0)),
             next_candidate_index=int(payload.get("next_candidate_index", 0)),
         )
@@ -35,6 +41,8 @@ class GuildState:
         self.rotation_channel_ids = list(dict.fromkeys(self.rotation_channel_ids))
         self.candidate_names = list(dict.fromkeys(self.candidate_names))
         self.interval_minutes = max(int(self.interval_minutes), MIN_INTERVAL_MINUTES)
+        if self.rotation_mode not in ROTATION_MODES:
+            self.rotation_mode = ROTATION_MODE_ONE
         if self.rotation_channel_ids:
             self.next_rotation_index %= len(self.rotation_channel_ids)
         else:

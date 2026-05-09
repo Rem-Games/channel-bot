@@ -11,7 +11,13 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from .config import load_config
-from .state import MIN_INTERVAL_MINUTES, StateStore, clean_candidate_name
+from .state import (
+    MIN_INTERVAL_MINUTES,
+    ROTATION_MODE_ALL,
+    ROTATION_MODE_ONE,
+    StateStore,
+    clean_candidate_name,
+)
 
 LOGGER = logging.getLogger(__name__)
 NAMES_PER_PAGE = 20
@@ -67,11 +73,11 @@ class RemChannelBot(commands.Bot):
             elapsed = (now - last_rotation_at).total_seconds() / 60
             if elapsed < state.interval_minutes:
                 continue
-            changed = await rotate_next_channel(guild, state, reason="scheduled rotation")
-            if changed:
+            changes = await rotate_channels(guild, state, reason="scheduled rotation")
+            if changes:
                 self.store.update_guild(guild.id, state)
                 setattr(self, last_key, now)
-                await send_command_channel_notice(guild, state, changed)
+                await send_command_channel_notice(guild, state, "\n".join(changes))
 
     @rotation_loop.before_loop
     async def before_rotation_loop(self) -> None:
@@ -146,11 +152,30 @@ class RemChannelGroup(app_commands.Group):
             f"Rotation interval set to {state.interval_minutes} minutes."
         )
 
+    @app_commands.command(name="mode", description="Set whether rotations update one channel or all channels")
+    @app_commands.describe(mode="Use one for the default one-channel rotation or all to update every channel")
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="one channel", value=ROTATION_MODE_ONE),
+            app_commands.Choice(name="all channels", value=ROTATION_MODE_ALL),
+        ]
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def mode(
+        self,
+        interaction: discord.Interaction,
+        mode: app_commands.Choice[str],
+    ) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        state.rotation_mode = mode.value
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(f"Rotation mode set to `{mode.value}`.")
+
     @app_commands.command(name="rotation-list", description="List channels in the rotation")
     @app_commands.default_permissions(administrator=True)
     async def rotation_list(self, interaction: discord.Interaction) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        lines = []
+        lines = [f"Mode: `{state.rotation_mode}`"]
         for channel_id in state.rotation_channel_ids:
             channel = interaction.guild.get_channel(channel_id)
             name = channel.name if channel else "missing"
@@ -254,15 +279,16 @@ class RemChannelGroup(app_commands.Group):
     @app_commands.default_permissions(administrator=True)
     async def rotate_now(self, interaction: discord.Interaction) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        changed = await rotate_next_channel(interaction.guild, state, reason="manual rotation")
-        if not changed:
+        changes = await rotate_channels(interaction.guild, state, reason="manual rotation")
+        if not changes:
             await interaction.response.send_message(
-                "Rotation needs at least one configured channel and one candidate name.",
+                "No channels could be rotated. Rotation needs configured channels, candidate names, "
+                "and at least one candidate name that is not already in use.",
                 ephemeral=True,
             )
             return
         self.bot.store.update_guild(interaction.guild_id, state)
-        await interaction.response.send_message(changed)
+        await interaction.response.send_message("\n".join(changes))
 
 
 def is_admin(member: discord.Member) -> bool:
@@ -290,10 +316,19 @@ def format_channel(channel: discord.abc.GuildChannel) -> str:
     return mention if mention else f"`{channel.name}`"
 
 
+async def rotate_channels(guild: discord.Guild, state, reason: str) -> list[str]:
+    if state.rotation_mode == ROTATION_MODE_ALL:
+        return await rotate_all_channels(guild, state, reason)
+
+    changed = await rotate_next_channel(guild, state, reason)
+    return [changed] if changed else []
+
+
 async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str | None:
     if not state.rotation_channel_ids or not state.candidate_names:
         return None
 
+    current_names = current_rotation_channel_names(guild, state.rotation_channel_ids)
     attempts = len(state.rotation_channel_ids)
     for _ in range(attempts):
         channel_id = state.rotation_channel_ids[state.next_rotation_index]
@@ -304,9 +339,9 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
         if not isinstance(channel, discord.abc.GuildChannel):
             continue
 
-        name = next_candidate_name(state, channel.name)
+        name = next_candidate_name(state, channel.name, current_names - {channel.name})
         if name is None:
-            return None
+            continue
 
         try:
             await channel.edit(name=name, reason=reason)
@@ -320,9 +355,57 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
     return None
 
 
-def next_candidate_name(state, current_name: str) -> str | None:
+async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[str]:
+    if not state.rotation_channel_ids or not state.candidate_names:
+        return []
+
+    channels = [
+        channel
+        for channel_id in state.rotation_channel_ids
+        if isinstance((channel := guild.get_channel(channel_id)), discord.abc.GuildChannel)
+    ]
+    if not channels:
+        return []
+
+    planned_names: dict[int, str] = {}
+    reserved_names = {channel.name for channel in channels}
+    for channel in channels:
+        name = next_candidate_name(state, channel.name, reserved_names - {channel.name})
+        if name is None:
+            continue
+        planned_names[channel.id] = name
+        reserved_names.add(name)
+
+    changes = []
+    for channel in channels:
+        name = planned_names.get(channel.id)
+        if name is None:
+            continue
+        try:
+            await channel.edit(name=name, reason=reason)
+        except discord.Forbidden:
+            LOGGER.warning("Missing permissions to rename channel %s in guild %s", channel.id, guild.id)
+            changes.append(f"Missing permissions to rename `{channel.name}` (`{channel.id}`).")
+        except discord.HTTPException as exc:
+            LOGGER.warning("Failed to rename channel %s in guild %s: %s", channel.id, guild.id, exc)
+            changes.append(f"Failed to rename `{channel.name}` (`{channel.id}`): {exc}")
+        else:
+            changes.append(f"Renamed `{channel.name}` (`{channel.id}`) to `{name}`.")
+    return changes
+
+
+def current_rotation_channel_names(guild: discord.Guild, channel_ids: list[int]) -> set[str]:
+    return {
+        channel.name
+        for channel_id in channel_ids
+        if isinstance((channel := guild.get_channel(channel_id)), discord.abc.GuildChannel)
+    }
+
+
+def next_candidate_name(state, current_name: str, reserved_names: set[str] | None = None) -> str | None:
     if not state.candidate_names:
         return None
+    reserved_names = reserved_names or set()
     indexes = list(range(len(state.candidate_names)))
     start = state.next_candidate_index % len(indexes)
     ordered_indexes = indexes[start:] + indexes[:start]
@@ -330,7 +413,7 @@ def next_candidate_name(state, current_name: str) -> str | None:
         random.shuffle(ordered_indexes)
     for index in ordered_indexes:
         candidate = state.candidate_names[index]
-        if candidate != current_name:
+        if candidate != current_name and candidate not in reserved_names:
             state.next_candidate_index = (index + 1) % len(state.candidate_names)
             return candidate
     return None
