@@ -30,7 +30,19 @@ class RemChannelBot(commands.Bot):
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
+            try:
+                await self.tree.sync(guild=guild)
+            except discord.Forbidden as exc:
+                LOGGER.error(
+                    "Discord rejected guild command sync for guild %s. "
+                    "Check that DISCORD_GUILD_ID is the target server ID and that the bot was "
+                    "invited to that server with both the bot and applications.commands scopes.",
+                    self.guild_id,
+                )
+                raise RuntimeError(
+                    "Unable to sync slash commands. Check DISCORD_GUILD_ID and reinvite the "
+                    "bot with bot + applications.commands scopes."
+                ) from exc
             LOGGER.info("Synced commands to guild %s", self.guild_id)
         else:
             await self.tree.sync()

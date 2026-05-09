@@ -48,6 +48,8 @@ py -m venv .venv
 
 Python 3.13 and newer require the `audioop-lts` compatibility package, which is included in `requirements.txt`.
 
+If startup fails with `403 Forbidden (error code: 50001): Missing Access` while syncing commands, check `DISCORD_GUILD_ID` and reinvite the bot. That error usually means the configured guild ID is not the target server ID, or the bot was not invited to that server with both `bot` and `applications.commands` scopes.
+
 ## First Use
 
 After inviting the bot, run:
