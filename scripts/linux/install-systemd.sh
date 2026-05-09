@@ -9,12 +9,27 @@ RUN_GROUP="${RUN_GROUP:-$(id -gn)}"
 TEMPLATE="${PROJECT_DIR}/deploy/systemd/remchannelbot.service.template"
 
 if [[ ! -x "${PROJECT_DIR}/.venv/bin/python" ]]; then
-  echo "Missing ${PROJECT_DIR}/.venv/bin/python. Create the virtual environment and install requirements first." >&2
+  cat >&2 <<EOF
+Missing ${PROJECT_DIR}/.venv/bin/python.
+
+Create a Linux virtual environment and install dependencies first:
+  cd "${PROJECT_DIR}"
+  python3 -m venv .venv
+  .venv/bin/pip install -r requirements.txt
+
+EOF
   exit 1
 fi
 
 if [[ ! -f "${PROJECT_DIR}/.env" ]]; then
-  echo "Missing ${PROJECT_DIR}/.env. Create it from .env.example before starting the service." >&2
+  cat >&2 <<EOF
+Missing ${PROJECT_DIR}/.env.
+
+Create it from .env.example and fill in DISCORD_TOKEN before installing the service:
+  cd "${PROJECT_DIR}"
+  cp .env.example .env
+
+EOF
   exit 1
 fi
 

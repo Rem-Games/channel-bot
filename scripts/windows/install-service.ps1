@@ -12,16 +12,36 @@ $EnvPath = Join-Path $ProjectDir ".env"
 $DataDir = Join-Path $ProjectDir "data"
 
 if (-not (Test-Path $PythonPath)) {
-    throw "Missing $PythonPath. Create the virtual environment and install requirements first."
+    throw @"
+Missing $PythonPath.
+
+Create a Windows virtual environment and install dependencies first:
+  cd "$ProjectDir"
+  py -m venv .venv
+  .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+A Linux/WSL .venv cannot run as a native Windows service.
+"@
 }
 
 if (-not (Test-Path $EnvPath)) {
-    throw "Missing $EnvPath. Create it from .env.example before starting the service."
+    throw @"
+Missing $EnvPath.
+
+Create it from .env.example and fill in DISCORD_TOKEN before installing the service:
+  cd "$ProjectDir"
+  Copy-Item .env.example .env
+"@
 }
 
 $NssmCommand = Get-Command $NssmPath -ErrorAction SilentlyContinue
 if (-not $NssmCommand) {
-    throw "NSSM was not found. Install NSSM and pass -NssmPath, or put nssm.exe on PATH."
+    throw @"
+NSSM was not found.
+
+Install NSSM and put nssm.exe on PATH, or pass the full path:
+  .\scripts\windows\install-service.ps1 -NssmPath "<full path to nssm.exe>"
+"@
 }
 
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null

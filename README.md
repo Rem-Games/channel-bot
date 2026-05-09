@@ -20,13 +20,30 @@ Create an app in the Discord Developer Portal, then configure it for a server in
 
 Discord's bot guide starts at https://docs.discord.com/developers/platform/bots and the getting-started guide is at https://docs.discord.com/developers/quick-start/getting-started.
 
-Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN`. `DISCORD_GUILD_ID` is optional, but recommended while developing because guild command sync is immediate for that server.
+Copy `.env.example` to `.env` and fill in `DISCORD_TOKEN`. `DISCORD_GUILD_ID` is optional, but recommended while developing because guild command sync is immediate for that server. `.env` contains secrets and should never be committed.
+
+`.venv` is different from `.env`. `.venv` is a generated Python virtual environment directory that contains Python executables and installed packages. It is OS-specific:
+
+- Linux/WSL uses `.venv/bin/python`
+- Windows uses `.venv\Scripts\python.exe`
+
+A `.venv` created on Linux/WSL will not run as a native Windows service, and a Windows `.venv` will not run as a Linux systemd service.
+
+Linux/WSL setup:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m remchannelbot
+```
+
+Windows PowerShell setup:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m remchannelbot
 ```
 
 ## First Use
@@ -57,7 +74,14 @@ Discord requires the bot to have `Manage Channels` to rename guild channels. Dis
 
 ## Linux systemd Service
 
-Create `.env`, create a Linux `.venv`, and install `requirements.txt` first. Then install the service:
+Create `.env`, create a Linux `.venv`, and install `requirements.txt` first:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Then install the service:
 
 ```bash
 scripts/linux/install-systemd.sh
@@ -83,7 +107,14 @@ scripts/linux/uninstall-systemd.sh
 
 Windows needs a service wrapper because Python console apps do not implement the Windows Service Control Manager protocol directly. These scripts use NSSM.
 
-Install NSSM, create `.env`, create a Windows `.venv`, and install `requirements.txt` first. A virtual environment created on Linux/WSL will not run as a native Windows service. Then run PowerShell as Administrator:
+Install NSSM, create `.env`, create a Windows `.venv`, and install `requirements.txt` first. A virtual environment created on Linux/WSL will not run as a native Windows service.
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Then run PowerShell as Administrator:
 
 ```powershell
 .\scripts\windows\install-service.ps1
