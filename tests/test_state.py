@@ -50,6 +50,9 @@ class StateTests(unittest.TestCase):
     def test_normalize_text_channel_name_matches_discord_text_style(self) -> None:
         self.assertEqual(normalize_text_channel_name("  Spicy   Channel  "), "spicy-channel")
 
+    def test_normalize_text_channel_name_strips_punctuation(self) -> None:
+        self.assertEqual(normalize_text_channel_name("ooo, banana"), "ooo-banana")
+
     def test_next_candidate_name_uses_transformed_names_for_reserved_check(self) -> None:
         state = GuildState(candidate_names=["Peaches Peaches", "Spicy Channel"])
 
@@ -76,6 +79,9 @@ class StateTests(unittest.TestCase):
 
     def test_candidate_key_treats_spaces_and_hyphens_as_same_candidate(self) -> None:
         self.assertEqual(candidate_key("peaches peaches"), candidate_key("peaches-peaches"))
+
+    def test_candidate_key_treats_comma_variants_as_same_candidate(self) -> None:
+        self.assertEqual(candidate_key("ooo, banana"), candidate_key("ooo-banana"))
 
     def test_next_candidate_name_skips_reserved_candidate_key(self) -> None:
         state = GuildState(candidate_names=["peaches peaches", "saucy channel"])

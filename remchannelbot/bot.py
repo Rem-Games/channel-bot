@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import random
+import re
 from datetime import UTC, datetime
 from typing import Callable
 
@@ -361,15 +362,16 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
         if name is None:
             continue
 
+        old_name = channel.name
         try:
             await channel.edit(name=name, reason=reason)
         except discord.Forbidden:
             LOGGER.warning("Missing permissions to rename channel %s in guild %s", channel_id, guild.id)
-            return f"Missing permissions to rename `{channel.name}` (`{channel_id}`)."
+            return f"Missing permissions to rename `{old_name}` (`{channel_id}`)."
         except discord.HTTPException as exc:
             LOGGER.warning("Failed to rename channel %s in guild %s: %s", channel_id, guild.id, exc)
-            return f"Failed to rename `{channel.name}` (`{channel_id}`): {exc}"
-        return f"Renamed `{channel.name}` (`{channel_id}`) to `{name}`."
+            return f"Failed to rename `{old_name}` (`{channel_id}`): {exc}"
+        return f"Renamed `{old_name}` (`{channel_id}`) to `{name}`."
     return None
 
 
@@ -404,16 +406,17 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
         name = planned_names.get(channel.id)
         if name is None:
             continue
+        old_name = channel.name
         try:
             await channel.edit(name=name, reason=reason)
         except discord.Forbidden:
             LOGGER.warning("Missing permissions to rename channel %s in guild %s", channel.id, guild.id)
-            changes.append(f"Missing permissions to rename `{channel.name}` (`{channel.id}`).")
+            changes.append(f"Missing permissions to rename `{old_name}` (`{channel.id}`).")
         except discord.HTTPException as exc:
             LOGGER.warning("Failed to rename channel %s in guild %s: %s", channel.id, guild.id, exc)
-            changes.append(f"Failed to rename `{channel.name}` (`{channel.id}`): {exc}")
+            changes.append(f"Failed to rename `{old_name}` (`{channel.id}`): {exc}")
         else:
-            changes.append(f"Renamed `{channel.name}` (`{channel.id}`) to `{name}`.")
+            changes.append(f"Renamed `{old_name}` (`{channel.id}`) to `{name}`.")
     return changes
 
 
@@ -426,7 +429,10 @@ def current_rotation_candidate_keys(guild: discord.Guild, channel_ids: list[int]
 
 
 def normalize_text_channel_name(name: str) -> str:
-    return "-".join(name.lower().split())
+    normalized = re.sub(r"\s+", "-", name.strip().lower())
+    normalized = re.sub(r"[^a-z0-9_-]+", "", normalized)
+    normalized = re.sub(r"-{2,}", "-", normalized)
+    return normalized.strip("-")
 
 
 def candidate_key(name: str) -> str:
