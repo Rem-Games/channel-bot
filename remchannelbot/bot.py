@@ -341,7 +341,7 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
     if not state.rotation_channel_ids or not state.candidate_names:
         return None
 
-    current_names = current_rotation_channel_names(guild, state.rotation_channel_ids)
+    current_keys = current_rotation_candidate_keys(guild, state.rotation_channel_ids)
     attempts = len(state.rotation_channel_ids)
     for _ in range(attempts):
         channel_id = state.rotation_channel_ids[state.next_rotation_index]
@@ -355,7 +355,7 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
         name = next_candidate_name(
             state,
             channel.name,
-            current_names - {channel.name},
+            current_keys - {candidate_key(channel.name)},
             name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
         )
         if name is None:
@@ -386,18 +386,18 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
         return []
 
     planned_names: dict[int, str] = {}
-    reserved_names = {channel.name for channel in channels}
+    reserved_keys = {candidate_key(channel.name) for channel in channels}
     for channel in channels:
         name = next_candidate_name(
             state,
             channel.name,
-            reserved_names - {channel.name},
+            reserved_keys - {candidate_key(channel.name)},
             name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
         )
         if name is None:
             continue
         planned_names[channel.id] = name
-        reserved_names.add(name)
+        reserved_keys.add(candidate_key(name))
 
     changes = []
     for channel in channels:
@@ -417,9 +417,9 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
     return changes
 
 
-def current_rotation_channel_names(guild: discord.Guild, channel_ids: list[int]) -> set[str]:
+def current_rotation_candidate_keys(guild: discord.Guild, channel_ids: list[int]) -> set[str]:
     return {
-        channel.name
+        candidate_key(channel.name)
         for channel_id in channel_ids
         if isinstance((channel := guild.get_channel(channel_id)), discord.abc.GuildChannel)
     }
@@ -427,6 +427,10 @@ def current_rotation_channel_names(guild: discord.Guild, channel_ids: list[int])
 
 def normalize_text_channel_name(name: str) -> str:
     return "-".join(name.lower().split())
+
+
+def candidate_key(name: str) -> str:
+    return normalize_text_channel_name(name)
 
 
 def candidate_name_for_channel(channel: discord.abc.GuildChannel, candidate_name: str) -> str:
@@ -442,12 +446,13 @@ def identity_name(name: str) -> str:
 def next_candidate_name(
     state,
     current_name: str,
-    reserved_names: set[str] | None = None,
+    reserved_keys: set[str] | None = None,
     name_transform: Callable[[str], str] = identity_name,
 ) -> str | None:
     if not state.candidate_names:
         return None
-    reserved_names = reserved_names or set()
+    reserved_keys = reserved_keys or set()
+    current_key = candidate_key(current_name)
     indexes = list(range(len(state.candidate_names)))
     start = state.next_candidate_index % len(indexes)
     ordered_indexes = indexes[start:] + indexes[:start]
@@ -455,7 +460,7 @@ def next_candidate_name(
         random.shuffle(ordered_indexes)
     for index in ordered_indexes:
         candidate = name_transform(state.candidate_names[index])
-        if candidate != current_name and candidate not in reserved_names:
+        if candidate_key(candidate) != current_key and candidate_key(candidate) not in reserved_keys:
             state.next_candidate_index = (index + 1) % len(state.candidate_names)
             return candidate
     return None

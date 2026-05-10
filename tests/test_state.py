@@ -7,7 +7,7 @@ from remchannelbot.state import (
     GuildState,
     clean_candidate_name,
 )
-from remchannelbot.bot import next_candidate_name, normalize_text_channel_name
+from remchannelbot.bot import candidate_key, next_candidate_name, normalize_text_channel_name
 
 
 class StateTests(unittest.TestCase):
@@ -73,6 +73,14 @@ class StateTests(unittest.TestCase):
                 name_transform=normalize_text_channel_name,
             )
         )
+
+    def test_candidate_key_treats_spaces_and_hyphens_as_same_candidate(self) -> None:
+        self.assertEqual(candidate_key("peaches peaches"), candidate_key("peaches-peaches"))
+
+    def test_next_candidate_name_skips_reserved_candidate_key(self) -> None:
+        state = GuildState(candidate_names=["peaches peaches", "saucy channel"])
+
+        self.assertEqual(next_candidate_name(state, "old", {"peaches-peaches"}), "saucy channel")
 
 
 if __name__ == "__main__":
