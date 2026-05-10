@@ -7,7 +7,7 @@ from remchannelbot.state import (
     GuildState,
     clean_candidate_name,
 )
-from remchannelbot.bot import next_candidate_name
+from remchannelbot.bot import next_candidate_name, normalize_text_channel_name
 
 
 class StateTests(unittest.TestCase):
@@ -46,6 +46,33 @@ class StateTests(unittest.TestCase):
         state = GuildState(candidate_names=["alpha", "beta"])
 
         self.assertIsNone(next_candidate_name(state, "old", {"alpha", "beta"}))
+
+    def test_normalize_text_channel_name_matches_discord_text_style(self) -> None:
+        self.assertEqual(normalize_text_channel_name("  Spicy   Channel  "), "spicy-channel")
+
+    def test_next_candidate_name_uses_transformed_names_for_reserved_check(self) -> None:
+        state = GuildState(candidate_names=["Peaches Peaches", "Spicy Channel"])
+
+        self.assertEqual(
+            next_candidate_name(
+                state,
+                "old",
+                {"peaches-peaches"},
+                name_transform=normalize_text_channel_name,
+            ),
+            "spicy-channel",
+        )
+
+    def test_next_candidate_name_uses_transformed_names_for_current_check(self) -> None:
+        state = GuildState(candidate_names=["Mild Channel"])
+
+        self.assertIsNone(
+            next_candidate_name(
+                state,
+                "mild-channel",
+                name_transform=normalize_text_channel_name,
+            )
+        )
 
 
 if __name__ == "__main__":

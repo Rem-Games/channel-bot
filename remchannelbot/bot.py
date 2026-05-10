@@ -5,6 +5,7 @@ import io
 import logging
 import random
 from datetime import UTC, datetime
+from typing import Callable
 
 import discord
 from discord import app_commands
@@ -351,7 +352,12 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
         if not isinstance(channel, discord.abc.GuildChannel):
             continue
 
-        name = next_candidate_name(state, channel.name, current_names - {channel.name})
+        name = next_candidate_name(
+            state,
+            channel.name,
+            current_names - {channel.name},
+            name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
+        )
         if name is None:
             continue
 
@@ -382,7 +388,12 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
     planned_names: dict[int, str] = {}
     reserved_names = {channel.name for channel in channels}
     for channel in channels:
-        name = next_candidate_name(state, channel.name, reserved_names - {channel.name})
+        name = next_candidate_name(
+            state,
+            channel.name,
+            reserved_names - {channel.name},
+            name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
+        )
         if name is None:
             continue
         planned_names[channel.id] = name
@@ -414,7 +425,26 @@ def current_rotation_channel_names(guild: discord.Guild, channel_ids: list[int])
     }
 
 
-def next_candidate_name(state, current_name: str, reserved_names: set[str] | None = None) -> str | None:
+def normalize_text_channel_name(name: str) -> str:
+    return "-".join(name.lower().split())
+
+
+def candidate_name_for_channel(channel: discord.abc.GuildChannel, candidate_name: str) -> str:
+    if isinstance(channel, (discord.TextChannel, discord.ForumChannel)):
+        return normalize_text_channel_name(candidate_name)
+    return candidate_name
+
+
+def identity_name(name: str) -> str:
+    return name
+
+
+def next_candidate_name(
+    state,
+    current_name: str,
+    reserved_names: set[str] | None = None,
+    name_transform: Callable[[str], str] = identity_name,
+) -> str | None:
     if not state.candidate_names:
         return None
     reserved_names = reserved_names or set()
@@ -424,7 +454,7 @@ def next_candidate_name(state, current_name: str, reserved_names: set[str] | Non
     if len(ordered_indexes) > 1:
         random.shuffle(ordered_indexes)
     for index in ordered_indexes:
-        candidate = state.candidate_names[index]
+        candidate = name_transform(state.candidate_names[index])
         if candidate != current_name and candidate not in reserved_names:
             state.next_candidate_index = (index + 1) % len(state.candidate_names)
             return candidate
