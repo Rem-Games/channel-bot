@@ -14,6 +14,8 @@ from discord.ext import commands, tasks
 
 from .config import load_config
 from .state import (
+    LIST_MODE_EXHAUSTIVE,
+    LIST_MODE_RANDOM,
     MIN_INTERVAL_MINUTES,
     ROTATION_MODE_ALL,
     ROTATION_MODE_ONE,
@@ -174,6 +176,29 @@ class RemChannelGroup(app_commands.Group):
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message(f"Rotation mode set to `{mode.value}`.")
 
+    @app_commands.command(name="list-mode", description="Set how candidate names are selected")
+    @app_commands.describe(
+        mode="Use fully random selection or exhaust all candidate names before repeats"
+    )
+    @app_commands.choices(
+        mode=[
+            app_commands.Choice(name="fully random", value=LIST_MODE_RANDOM),
+            app_commands.Choice(name="exhaustive", value=LIST_MODE_EXHAUSTIVE),
+        ]
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def list_mode(
+        self,
+        interaction: discord.Interaction,
+        mode: app_commands.Choice[str],
+    ) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        state.list_mode = mode.value
+        if mode.value == LIST_MODE_RANDOM:
+            state.used_candidate_keys = []
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(f"List mode set to `{mode.value}`.")
+
     @app_commands.command(name="quiet", description="Toggle scheduled rotation notices")
     @app_commands.describe(enabled="True suppresses scheduled rotation messages; false sends them")
     @app_commands.default_permissions(administrator=True)
@@ -189,7 +214,11 @@ class RemChannelGroup(app_commands.Group):
     async def rotation_list(self, interaction: discord.Interaction) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
         quiet = "enabled" if state.quiet_mode else "disabled"
-        lines = [f"Mode: `{state.rotation_mode}`", f"Quiet mode: `{quiet}`"]
+        lines = [
+            f"Mode: `{state.rotation_mode}`",
+            f"List mode: `{state.list_mode}`",
+            f"Quiet mode: `{quiet}`",
+        ]
         for channel_id in state.rotation_channel_ids:
             channel = interaction.guild.get_channel(channel_id)
             name = channel.name if channel else "missing"
@@ -459,17 +488,40 @@ def next_candidate_name(
         return None
     reserved_keys = reserved_keys or set()
     current_key = candidate_key(current_name)
-    indexes = list(range(len(state.candidate_names)))
-    start = state.next_candidate_index % len(indexes)
-    ordered_indexes = indexes[start:] + indexes[:start]
-    if len(ordered_indexes) > 1:
-        random.shuffle(ordered_indexes)
-    for index in ordered_indexes:
-        candidate = name_transform(state.candidate_names[index])
-        if candidate_key(candidate) != current_key and candidate_key(candidate) not in reserved_keys:
-            state.next_candidate_index = (index + 1) % len(state.candidate_names)
-            return candidate
-    return None
+
+    candidates = []
+    for index, raw_candidate in enumerate(state.candidate_names):
+        candidate = name_transform(raw_candidate)
+        key = candidate_key(candidate)
+        if key != current_key and key not in reserved_keys:
+            candidates.append((index, candidate, key))
+
+    if not candidates:
+        return None
+
+    if state.list_mode == LIST_MODE_EXHAUSTIVE:
+        valid_keys = {
+            candidate_key(name_transform(candidate)) for candidate in state.candidate_names
+        }
+        state.used_candidate_keys = [
+            key for key in dict.fromkeys(state.used_candidate_keys) if key in valid_keys
+        ]
+        used_keys = set(state.used_candidate_keys)
+        unused_candidates = [
+            candidate for candidate in candidates if candidate[2] not in used_keys
+        ]
+        if not unused_candidates:
+            state.used_candidate_keys = []
+            unused_candidates = candidates
+        index, candidate, key = random.choice(unused_candidates)
+        state.used_candidate_keys.append(key)
+        state.next_candidate_index = (index + 1) % len(state.candidate_names)
+        return candidate
+
+    index, candidate, _key = random.choice(candidates)
+    state.next_candidate_index = (index + 1) % len(state.candidate_names)
+    state.used_candidate_keys = []
+    return candidate
 
 
 async def send_command_channel_notice(guild: discord.Guild, state, message: str) -> None:

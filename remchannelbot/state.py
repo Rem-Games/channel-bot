@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import RLock
@@ -11,6 +12,9 @@ DEFAULT_INTERVAL_MINUTES = 60
 ROTATION_MODE_ONE = "one"
 ROTATION_MODE_ALL = "all"
 ROTATION_MODES = {ROTATION_MODE_ONE, ROTATION_MODE_ALL}
+LIST_MODE_RANDOM = "random"
+LIST_MODE_EXHAUSTIVE = "exhaustive"
+LIST_MODES = {LIST_MODE_RANDOM, LIST_MODE_EXHAUSTIVE}
 
 
 @dataclass
@@ -20,23 +24,28 @@ class GuildState:
     candidate_names: list[str] = field(default_factory=list)
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES
     rotation_mode: str = ROTATION_MODE_ONE
+    list_mode: str = LIST_MODE_RANDOM
     quiet_mode: bool = False
     next_rotation_index: int = 0
     next_candidate_index: int = 0
+    used_candidate_keys: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> GuildState:
         interval = int(payload.get("interval_minutes", DEFAULT_INTERVAL_MINUTES))
         rotation_mode = str(payload.get("rotation_mode", ROTATION_MODE_ONE))
+        list_mode = str(payload.get("list_mode", LIST_MODE_RANDOM))
         return cls(
             command_channel_id=_optional_int(payload.get("command_channel_id")),
             rotation_channel_ids=[int(value) for value in payload.get("rotation_channel_ids", [])],
             candidate_names=[str(value) for value in payload.get("candidate_names", [])],
             interval_minutes=max(interval, MIN_INTERVAL_MINUTES),
             rotation_mode=rotation_mode,
+            list_mode=list_mode,
             quiet_mode=bool(payload.get("quiet_mode", False)),
             next_rotation_index=int(payload.get("next_rotation_index", 0)),
             next_candidate_index=int(payload.get("next_candidate_index", 0)),
+            used_candidate_keys=[str(value) for value in payload.get("used_candidate_keys", [])],
         )
 
     def normalized(self) -> GuildState:
@@ -45,6 +54,8 @@ class GuildState:
         self.interval_minutes = max(int(self.interval_minutes), MIN_INTERVAL_MINUTES)
         if self.rotation_mode not in ROTATION_MODES:
             self.rotation_mode = ROTATION_MODE_ONE
+        if self.list_mode not in LIST_MODES:
+            self.list_mode = LIST_MODE_RANDOM
         if self.rotation_channel_ids:
             self.next_rotation_index %= len(self.rotation_channel_ids)
         else:
@@ -53,6 +64,10 @@ class GuildState:
             self.next_candidate_index %= len(self.candidate_names)
         else:
             self.next_candidate_index = 0
+        valid_candidate_keys = {_candidate_key(name) for name in self.candidate_names}
+        self.used_candidate_keys = list(
+            dict.fromkeys(key for key in self.used_candidate_keys if key in valid_candidate_keys)
+        )
         return self
 
 
@@ -113,3 +128,10 @@ def _optional_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     return int(value)
+
+
+def _candidate_key(name: str) -> str:
+    normalized = re.sub(r"\s+", "-", name.strip().lower())
+    normalized = re.sub(r"[^a-z0-9_-]+", "", normalized)
+    normalized = re.sub(r"-{2,}", "-", normalized)
+    return normalized.strip("-")

@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 from remchannelbot.state import (
     DEFAULT_INTERVAL_MINUTES,
+    LIST_MODE_EXHAUSTIVE,
+    LIST_MODE_RANDOM,
     MIN_INTERVAL_MINUTES,
     ROTATION_MODE_ONE,
     GuildState,
@@ -21,14 +24,31 @@ class StateTests(unittest.TestCase):
 
         self.assertEqual(state.interval_minutes, DEFAULT_INTERVAL_MINUTES)
         self.assertEqual(state.rotation_mode, ROTATION_MODE_ONE)
+        self.assertEqual(state.list_mode, LIST_MODE_RANDOM)
         self.assertFalse(state.quiet_mode)
         self.assertEqual(state.rotation_channel_ids, [])
         self.assertEqual(state.candidate_names, [])
+        self.assertEqual(state.used_candidate_keys, [])
 
     def test_guild_state_defaults_unknown_rotation_mode_to_one(self) -> None:
         state = GuildState.from_dict({"rotation_mode": "bad"}).normalized()
 
         self.assertEqual(state.rotation_mode, ROTATION_MODE_ONE)
+
+    def test_guild_state_defaults_unknown_list_mode_to_random(self) -> None:
+        state = GuildState.from_dict({"list_mode": "bad"}).normalized()
+
+        self.assertEqual(state.list_mode, LIST_MODE_RANDOM)
+
+    def test_guild_state_prunes_used_candidate_keys(self) -> None:
+        state = GuildState.from_dict(
+            {
+                "candidate_names": ["alpha"],
+                "used_candidate_keys": ["alpha", "beta", "alpha"],
+            }
+        ).normalized()
+
+        self.assertEqual(state.used_candidate_keys, ["alpha"])
 
     def test_clean_candidate_name_collapses_whitespace(self) -> None:
         self.assertEqual(clean_candidate_name("  alpha   beta  "), "alpha beta")
@@ -87,6 +107,31 @@ class StateTests(unittest.TestCase):
         state = GuildState(candidate_names=["peaches peaches", "saucy channel"])
 
         self.assertEqual(next_candidate_name(state, "old", {"peaches-peaches"}), "saucy channel")
+
+    def test_exhaustive_list_mode_uses_all_names_before_repeating(self) -> None:
+        state = GuildState(
+            candidate_names=["alpha", "beta", "gamma"],
+            list_mode=LIST_MODE_EXHAUSTIVE,
+        )
+
+        with patch("remchannelbot.bot.random.choice", side_effect=lambda values: values[0]):
+            self.assertEqual(next_candidate_name(state, "old"), "alpha")
+            self.assertEqual(next_candidate_name(state, "old"), "beta")
+            self.assertEqual(next_candidate_name(state, "old"), "gamma")
+            self.assertEqual(next_candidate_name(state, "old"), "alpha")
+
+    def test_exhaustive_list_mode_resets_during_multi_channel_selection(self) -> None:
+        state = GuildState(
+            candidate_names=["alpha", "beta", "gamma"],
+            list_mode=LIST_MODE_EXHAUSTIVE,
+            used_candidate_keys=["alpha", "beta"],
+        )
+
+        with patch("remchannelbot.bot.random.choice", side_effect=lambda values: values[0]):
+            self.assertEqual(next_candidate_name(state, "old"), "gamma")
+            self.assertEqual(next_candidate_name(state, "old", {"gamma"}), "alpha")
+
+        self.assertEqual(state.used_candidate_keys, ["alpha"])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ A Discord bot that rotates configured channel names from an admin-managed candid
 - Commands are restricted to the server owner or members with the Discord Administrator permission.
 - A configured command channel gates operational commands and receives rotation notices.
 - Rotates one configured channel per interval to avoid burst channel edits.
+- Candidate names can be selected fully randomly or exhaustively before repeats.
 - JSON-backed state that can be backed up or moved with the bot.
 
 ## Discord Setup
@@ -69,6 +70,7 @@ After setup, all operational commands must be run in that command channel.
 - `/remchannel setup command-channel` - choose the channel used for bot commands and bot responses.
 - `/remchannel interval minutes` - set the rotation interval.
 - `/remchannel mode mode` - switch between one-channel rotation and all-channel rotation.
+- `/remchannel list-mode mode` - switch between fully random candidate selection and exhaustive selection.
 - `/remchannel quiet enabled` - toggle scheduled rotation notices after setup/testing.
 - `/remchannel rotation-add channel` - add a channel to the rotation.
 - `/remchannel rotation-remove channel` - remove a channel from the rotation by channel, ID, or unique current name.
@@ -83,6 +85,8 @@ After setup, all operational commands must be run in that command channel.
 Discord requires the bot to have `Manage Channels` to rename guild channels. Discord also rate-limits API calls; this bot rotates one channel per interval and enforces a minimum interval of 10 minutes.
 
 The default rotation mode updates one configured channel per interval. All-channel mode attempts to update every configured channel each interval. In either mode, the bot will not rename a channel to a candidate name already used by another configured rotation channel.
+
+The default list mode is fully random. Exhaustive list mode tracks candidate names as they are chosen and will not choose a candidate again until every configured candidate name has been chosen once. If an all-channel rotation exhausts the last remaining candidate while updating multiple channels, the exhausted list resets immediately so the rest of that rotation can still pick valid names.
 
 Quiet mode suppresses scheduled rotation messages in the configured command channel. Manual commands still respond so admins can see command results.
 
