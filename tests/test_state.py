@@ -43,12 +43,22 @@ class StateTests(unittest.TestCase):
     def test_guild_state_prunes_used_candidate_keys(self) -> None:
         state = GuildState.from_dict(
             {
-                "candidate_names": ["alpha"],
+                "candidate_names": ["alpha", "gamma"],
                 "used_candidate_keys": ["alpha", "beta", "alpha"],
             }
         ).normalized()
 
         self.assertEqual(state.used_candidate_keys, ["alpha"])
+
+    def test_guild_state_clears_exhausted_candidate_keys(self) -> None:
+        state = GuildState.from_dict(
+            {
+                "candidate_names": ["alpha", "beta"],
+                "used_candidate_keys": ["alpha", "beta"],
+            }
+        ).normalized()
+
+        self.assertEqual(state.used_candidate_keys, [])
 
     def test_clean_candidate_name_collapses_whitespace(self) -> None:
         self.assertEqual(clean_candidate_name("  alpha   beta  "), "alpha beta")
@@ -130,6 +140,31 @@ class StateTests(unittest.TestCase):
         with patch("remchannelbot.bot.random.choice", side_effect=lambda values: values[0]):
             self.assertEqual(next_candidate_name(state, "old"), "gamma")
             self.assertEqual(next_candidate_name(state, "old", {"gamma"}), "alpha")
+
+        self.assertEqual(state.used_candidate_keys, ["alpha"])
+
+    def test_exhaustive_list_mode_clears_history_after_all_names_are_used(self) -> None:
+        state = GuildState(
+            candidate_names=["alpha", "beta", "gamma"],
+            list_mode=LIST_MODE_EXHAUSTIVE,
+            used_candidate_keys=["alpha", "beta"],
+        )
+
+        with patch("remchannelbot.bot.random.choice", side_effect=lambda values: values[0]):
+            self.assertEqual(next_candidate_name(state, "old"), "gamma")
+
+        self.assertEqual(state.used_candidate_keys, [])
+
+    def test_exhaustive_list_mode_does_not_force_new_candidate_after_restart(self) -> None:
+        state = GuildState(
+            candidate_names=["alpha", "beta"],
+            list_mode=LIST_MODE_EXHAUSTIVE,
+            used_candidate_keys=["alpha", "beta"],
+        ).normalized()
+        state.candidate_names.append("gamma")
+
+        with patch("remchannelbot.bot.random.choice", side_effect=lambda values: values[0]):
+            self.assertEqual(next_candidate_name(state, "old"), "alpha")
 
         self.assertEqual(state.used_candidate_keys, ["alpha"])
 

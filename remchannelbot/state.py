@@ -68,6 +68,8 @@ class GuildState:
         self.used_candidate_keys = list(
             dict.fromkeys(key for key in self.used_candidate_keys if key in valid_candidate_keys)
         )
+        if valid_candidate_keys and set(self.used_candidate_keys) == valid_candidate_keys:
+            self.used_candidate_keys = []
         return self
 
 

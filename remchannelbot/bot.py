@@ -515,6 +515,8 @@ def next_candidate_name(
             unused_candidates = candidates
         index, candidate, key = random.choice(unused_candidates)
         state.used_candidate_keys.append(key)
+        if set(state.used_candidate_keys) == valid_keys:
+            state.used_candidate_keys = []
         state.next_candidate_index = (index + 1) % len(state.candidate_names)
         return candidate
 
