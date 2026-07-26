@@ -8,9 +8,17 @@ from remchannelbot.state import (
     MIN_INTERVAL_MINUTES,
     ROTATION_MODE_ONE,
     GuildState,
+    SecretSantaDrawing,
     clean_candidate_name,
+    clean_santa_key,
+    clean_santa_name,
 )
-from remchannelbot.bot import candidate_key, next_candidate_name, normalize_text_channel_name
+from remchannelbot.bot import (
+    assign_secret_santa,
+    candidate_key,
+    next_candidate_name,
+    normalize_text_channel_name,
+)
 
 
 class StateTests(unittest.TestCase):
@@ -29,6 +37,8 @@ class StateTests(unittest.TestCase):
         self.assertEqual(state.rotation_channel_ids, [])
         self.assertEqual(state.candidate_names, [])
         self.assertEqual(state.used_candidate_keys, [])
+        self.assertIsNone(state.santa_channel_id)
+        self.assertEqual(state.santa_drawings, {})
 
     def test_guild_state_defaults_unknown_rotation_mode_to_one(self) -> None:
         state = GuildState.from_dict({"rotation_mode": "bad"}).normalized()
@@ -66,6 +76,58 @@ class StateTests(unittest.TestCase):
     def test_clean_candidate_name_rejects_empty(self) -> None:
         with self.assertRaisesRegex(ValueError, "1 to 100"):
             clean_candidate_name("   ")
+
+    def test_clean_santa_name_collapses_whitespace(self) -> None:
+        self.assertEqual(clean_santa_name("  Family   2026  "), "Family 2026")
+
+    def test_clean_santa_key_is_case_insensitive(self) -> None:
+        self.assertEqual(clean_santa_key("Family 2026"), clean_santa_key("family 2026"))
+
+    def test_guild_state_loads_secret_santa_drawings(self) -> None:
+        state = GuildState.from_dict(
+            {
+                "santa_channel_id": "123",
+                "santa_drawings": {
+                    "family": {
+                        "name": "Family",
+                        "creator_id": "10",
+                        "participant_ids": ["10", "20", "20"],
+                        "closed": True,
+                        "assignments": {"10": "20", "20": "10", "30": "10"},
+                    }
+                },
+            }
+        ).normalized()
+
+        self.assertEqual(state.santa_channel_id, 123)
+        self.assertEqual(list(state.santa_drawings), ["family"])
+        drawing = state.santa_drawings["family"]
+        self.assertEqual(drawing.participant_ids, [10, 20])
+        self.assertEqual(drawing.assignments, {10: 20, 20: 10})
+
+    def test_open_secret_santa_drawing_clears_assignments(self) -> None:
+        drawing = SecretSantaDrawing(
+            name="Family",
+            creator_id=10,
+            participant_ids=[10, 20],
+            closed=False,
+            assignments={10: 20},
+        ).normalized()
+
+        self.assertEqual(drawing.assignments, {})
+
+    def test_assign_secret_santa_never_assigns_self(self) -> None:
+        assignments = assign_secret_santa([10, 20, 30, 40])
+
+        self.assertEqual(set(assignments), {10, 20, 30, 40})
+        self.assertEqual(set(assignments.values()), {10, 20, 30, 40})
+        self.assertTrue(
+            all(giver_id != giftee_id for giver_id, giftee_id in assignments.items())
+        )
+
+    def test_assign_secret_santa_rejects_too_few_participants(self) -> None:
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            assign_secret_santa([10])
 
     def test_next_candidate_name_skips_reserved_names(self) -> None:
         state = GuildState(candidate_names=["alpha", "beta", "gamma"])

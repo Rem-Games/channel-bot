@@ -19,8 +19,11 @@ from .state import (
     MIN_INTERVAL_MINUTES,
     ROTATION_MODE_ALL,
     ROTATION_MODE_ONE,
+    SecretSantaDrawing,
     StateStore,
     clean_candidate_name,
+    clean_santa_key,
+    clean_santa_name,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -37,6 +40,8 @@ class RemChannelBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.tree.add_command(RemChannelGroup(self))
+        self.tree.add_command(SantaGroup(self))
+        self.tree.add_command(santa_channel)
         if self.guild_id:
             guild = discord.Object(id=self.guild_id)
             self.tree.copy_global_to(guild=guild)
@@ -332,6 +337,390 @@ class RemChannelGroup(app_commands.Group):
             return
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message("\n".join(changes))
+
+
+@app_commands.command(name="santa-channel", description="Set the Secret Santa command channel")
+@app_commands.describe(command_channel="Channel where Secret Santa commands are allowed")
+@app_commands.default_permissions(administrator=True)
+async def santa_channel(
+    interaction: discord.Interaction,
+    command_channel: discord.TextChannel,
+) -> None:
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message(
+            "This command can only be used in a server.", ephemeral=True
+        )
+        return
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(
+            "Only the server owner or members with Administrator can configure this bot.",
+            ephemeral=True,
+        )
+        return
+
+    bot = interaction.client
+    if not isinstance(bot, RemChannelBot):
+        await interaction.response.send_message("Bot state is unavailable.", ephemeral=True)
+        return
+    state = bot.store.get_guild(interaction.guild_id)
+    state.santa_channel_id = command_channel.id
+    bot.store.update_guild(interaction.guild_id, state)
+    await interaction.response.send_message(
+        f"Secret Santa channel set to {command_channel.mention}.", ephemeral=True
+    )
+    await command_channel.send("Secret Santa commands are configured for this channel.")
+
+
+class SantaDeleteConfirm(discord.ui.View):
+    def __init__(self, bot: RemChannelBot, guild_id: int, drawing_key: str, requester_id: int):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.drawing_key = drawing_key
+        self.requester_id = requester_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Only the user who requested deletion can confirm it.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+    async def delete(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        state = self.bot.store.get_guild(self.guild_id)
+        drawing = state.santa_drawings.pop(self.drawing_key, None)
+        if drawing is None:
+            await interaction.response.edit_message(
+                content="That drawing was already deleted.",
+                view=None,
+            )
+            return
+        self.bot.store.update_guild(self.guild_id, state)
+        await interaction.response.edit_message(
+            content=f"Deleted Secret Santa drawing `{drawing.name}`.", view=None
+        )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        await interaction.response.edit_message(content="Deletion cancelled.", view=None)
+        self.stop()
+
+
+class SantaGroup(app_commands.Group):
+    def __init__(self, bot: RemChannelBot):
+        super().__init__(name="santa", description="Manage Secret Santa drawings")
+        self.bot = bot
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return False
+
+        state = self.bot.store.get_guild(interaction.guild_id)
+        if state.santa_channel_id is None:
+            await interaction.response.send_message(
+                "Run `/santa-channel` in the channel Secret Santa commands should use first.",
+                ephemeral=True,
+            )
+            return False
+        if interaction.channel_id != state.santa_channel_id:
+            channel = interaction.guild.get_channel(state.santa_channel_id)
+            mention = channel.mention if channel else f"`{state.santa_channel_id}`"
+            await interaction.response.send_message(
+                f"Use Secret Santa commands in {mention}.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @app_commands.command(name="create", description="Create a Secret Santa drawing")
+    @app_commands.describe(name="Name for this drawing")
+    async def create(self, interaction: discord.Interaction, name: str) -> None:
+        try:
+            drawing_name = clean_santa_name(name)
+        except ValueError as exc:
+            await interaction.response.send_message(str(exc), ephemeral=True)
+            return
+
+        state = self.bot.store.get_guild(interaction.guild_id)
+        drawing_key = clean_santa_key(drawing_name)
+        if drawing_key in state.santa_drawings:
+            await interaction.response.send_message(
+                f"A Secret Santa drawing named `{drawing_name}` already exists.", ephemeral=True
+            )
+            return
+        state.santa_drawings[drawing_key] = SecretSantaDrawing(
+            name=drawing_name,
+            creator_id=interaction.user.id,
+        )
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(f"Created Secret Santa drawing `{drawing_name}`.")
+
+    @app_commands.command(name="delete", description="Delete a Secret Santa drawing")
+    @app_commands.describe(name="Name of the drawing to delete")
+    async def delete(self, interaction: discord.Interaction, name: str) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if not can_manage_santa(interaction.user, drawing):
+            await interaction.response.send_message(
+                "Only the drawing creator or server admins can delete that drawing.",
+                ephemeral=True,
+            )
+            return
+
+        view = SantaDeleteConfirm(
+            self.bot,
+            interaction.guild_id,
+            drawing_key,
+            interaction.user.id,
+        )
+        await interaction.response.send_message(
+            f"Delete Secret Santa drawing `{drawing.name}`? This cannot be undone.",
+            view=view,
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="join", description="Join a Secret Santa drawing")
+    @app_commands.describe(name="Name of the drawing to join")
+    async def join(self, interaction: discord.Interaction, name: str) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        _drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if drawing.closed:
+            await interaction.response.send_message(
+                "That drawing is already closed.",
+                ephemeral=True,
+            )
+            return
+        if interaction.user.id in drawing.participant_ids:
+            await interaction.response.send_message(
+                f"You are already in `{drawing.name}`.",
+                ephemeral=True,
+            )
+            return
+
+        drawing.participant_ids.append(interaction.user.id)
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} joined `{drawing.name}`. "
+            f"{len(drawing.participant_ids)} participant(s) are in."
+        )
+
+    @app_commands.command(name="leave", description="Leave a Secret Santa drawing")
+    @app_commands.describe(name="Name of the drawing to leave")
+    async def leave(self, interaction: discord.Interaction, name: str) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        _drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if drawing.closed:
+            await interaction.response.send_message(
+                "That drawing is already closed. Ask the creator or an admin to remove you.",
+                ephemeral=True,
+            )
+            return
+        if interaction.user.id not in drawing.participant_ids:
+            await interaction.response.send_message(
+                f"You are not in `{drawing.name}`.",
+                ephemeral=True,
+            )
+            return
+
+        drawing.participant_ids = [
+            user_id for user_id in drawing.participant_ids if user_id != interaction.user.id
+        ]
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} left `{drawing.name}`. "
+            f"{len(drawing.participant_ids)} participant(s) remain."
+        )
+
+    @app_commands.command(name="close", description="Close a drawing and assign giftees")
+    @app_commands.describe(name="Name of the drawing to close")
+    async def close(self, interaction: discord.Interaction, name: str) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        _drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if not can_manage_santa(interaction.user, drawing):
+            await interaction.response.send_message(
+                "Only the drawing creator or server admins can close that drawing.",
+                ephemeral=True,
+            )
+            return
+        if drawing.closed:
+            await interaction.response.send_message(
+                f"`{drawing.name}` is already closed.",
+                ephemeral=True,
+            )
+            return
+        if len(drawing.participant_ids) < 2:
+            await interaction.response.send_message(
+                "A Secret Santa drawing needs at least 2 participants before it can close.",
+                ephemeral=True,
+            )
+            return
+
+        close_santa_drawing(drawing)
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(
+            f"`{drawing.name}` is closed. Participants can run `/santa giftee {drawing.name}`."
+        )
+
+    @app_commands.command(name="admin-leave", description="Forcibly remove a user from a drawing")
+    @app_commands.describe(name="Name of the drawing", member="User to remove")
+    @app_commands.default_permissions(administrator=True)
+    async def admin_leave(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        member: discord.Member,
+    ) -> None:
+        if not isinstance(interaction.user, discord.Member) or not is_admin(interaction.user):
+            await interaction.response.send_message(
+                "Only the server owner or members with Administrator can remove another user.",
+                ephemeral=True,
+            )
+            return
+
+        state = self.bot.store.get_guild(interaction.guild_id)
+        _drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if member.id not in drawing.participant_ids:
+            await interaction.response.send_message(
+                f"{member.mention} is not in `{drawing.name}`.", ephemeral=True
+            )
+            return
+        if drawing.closed and len(drawing.participant_ids) <= 2:
+            await interaction.response.send_message(
+                "Cannot remove that user from a closed drawing because at least 2 "
+                "participants are required.",
+                ephemeral=True,
+            )
+            return
+
+        drawing.participant_ids = [
+            user_id for user_id in drawing.participant_ids if user_id != member.id
+        ]
+        reassigned = False
+        if drawing.closed:
+            close_santa_drawing(drawing)
+            reassigned = True
+        self.bot.store.update_guild(interaction.guild_id, state)
+        suffix = " Assignments were redrawn." if reassigned else ""
+        await interaction.response.send_message(
+            f"Removed {member.mention} from `{drawing.name}`.{suffix}"
+        )
+
+    @app_commands.command(name="giftee", description="Privately show who you drew")
+    @app_commands.describe(name="Name of the drawing")
+    async def giftee(self, interaction: discord.Interaction, name: str) -> None:
+        state = self.bot.store.get_guild(interaction.guild_id)
+        _drawing_key, drawing = find_santa_drawing(state, name)
+        if drawing is None:
+            await interaction.response.send_message(
+                "That Secret Santa drawing was not found.",
+                ephemeral=True,
+            )
+            return
+        if not drawing.closed:
+            await interaction.response.send_message(
+                "That drawing has not been closed yet.",
+                ephemeral=True,
+            )
+            return
+        giftee_id = drawing.assignments.get(interaction.user.id)
+        if giftee_id is None:
+            await interaction.response.send_message(
+                f"You are not in `{drawing.name}`.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"For `{drawing.name}`, you drew {format_user(interaction.guild, giftee_id)}.",
+            ephemeral=True,
+        )
+
+
+def find_santa_drawing(state, name: str) -> tuple[str | None, SecretSantaDrawing | None]:
+    try:
+        drawing_key = clean_santa_key(name)
+    except ValueError:
+        return None, None
+    drawing = state.santa_drawings.get(drawing_key)
+    return drawing_key, drawing
+
+
+def can_manage_santa(member: discord.Member, drawing: SecretSantaDrawing) -> bool:
+    return member.id == drawing.creator_id or is_admin(member)
+
+
+def close_santa_drawing(drawing: SecretSantaDrawing) -> None:
+    drawing.assignments = assign_secret_santa(drawing.participant_ids)
+    drawing.closed = True
+
+
+def assign_secret_santa(participant_ids: list[int]) -> dict[int, int]:
+    participants = list(dict.fromkeys(participant_ids))
+    if len(participants) < 2:
+        raise ValueError("Secret Santa drawings need at least 2 participants.")
+
+    for _attempt in range(100):
+        giftees = participants[:]
+        random.shuffle(giftees)
+        has_self_assignment = any(
+            giver_id == giftee_id
+            for giver_id, giftee_id in zip(participants, giftees, strict=True)
+        )
+        if not has_self_assignment:
+            return dict(zip(participants, giftees, strict=True))
+
+    ordered = participants[:]
+    random.shuffle(ordered)
+    rotated = ordered[1:] + ordered[:1]
+    return dict(zip(ordered, rotated, strict=True))
+
+
+def format_user(guild: discord.Guild, user_id: int) -> str:
+    member = guild.get_member(user_id)
+    return member.mention if member else f"<@{user_id}>"
 
 
 def is_admin(member: discord.Member) -> bool:

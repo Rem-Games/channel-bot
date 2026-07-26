@@ -9,6 +9,7 @@ A Discord bot that rotates configured channel names from an admin-managed candid
 - A configured command channel gates operational commands and receives rotation notices.
 - Rotates one configured channel per interval to avoid burst channel edits.
 - Candidate names can be selected fully randomly or exhaustively before repeats.
+- Secret Santa drawings with private giftee lookup.
 - JSON-backed state that can be backed up or moved with the bot.
 
 ## Discord Setup
@@ -79,6 +80,14 @@ After setup, all operational commands must be run in that command channel.
 - `/remchannel name-remove name` - remove a candidate channel name.
 - `/remchannel names-list page export` - list candidate names, paginated or as an attached text file.
 - `/remchannel rotate-now` - immediately rotate the next configured channel.
+- `/santa-channel command-channel` - choose the channel used for Secret Santa commands.
+- `/santa create name` - create a Secret Santa drawing.
+- `/santa delete name` - delete a drawing after private confirmation. Only the creator or admins can delete it.
+- `/santa join name` - join an open drawing.
+- `/santa leave name` - leave an open drawing.
+- `/santa close name` - close a drawing and assign giftees. Only the creator or admins can close it.
+- `/santa admin-leave name member` - remove a user from a drawing. If closed, assignments are redrawn.
+- `/santa giftee name` - privately show who you drew.
 
 ## Notes
 
@@ -89,6 +98,11 @@ The default rotation mode updates one configured channel per interval. All-chann
 The default list mode is fully random. Exhaustive list mode tracks candidate names as they are chosen and will not choose a candidate again until every configured candidate name has been chosen once. If an all-channel rotation exhausts the last remaining candidate while updating multiple channels, the exhausted list resets immediately so the rest of that rotation can still pick valid names.
 
 Quiet mode suppresses scheduled rotation messages in the configured command channel. Manual commands still respond so admins can see command results.
+
+Secret Santa commands use their own configured channel. Joining, leaving, and giftee lookup
+are available to participants in that channel. The giftee response is ephemeral so only the
+requesting user can see it. A drawing must have at least two participants before it can be
+closed, and assignments never match a participant to themselves.
 
 ## Linux systemd Service
 

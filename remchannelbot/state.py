@@ -18,10 +18,53 @@ LIST_MODES = {LIST_MODE_RANDOM, LIST_MODE_EXHAUSTIVE}
 
 
 @dataclass
+class SecretSantaDrawing:
+    name: str
+    creator_id: int
+    participant_ids: list[int] = field(default_factory=list)
+    closed: bool = False
+    assignments: dict[int, int] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: dict[str, Any],
+        fallback_name: str = "",
+    ) -> SecretSantaDrawing:
+        return cls(
+            name=clean_santa_name(str(payload.get("name") or fallback_name)),
+            creator_id=int(payload.get("creator_id", 0)),
+            participant_ids=[int(value) for value in payload.get("participant_ids", [])],
+            closed=bool(payload.get("closed", False)),
+            assignments={
+                int(giver_id): int(giftee_id)
+                for giver_id, giftee_id in payload.get("assignments", {}).items()
+            },
+        )
+
+    def normalized(self) -> SecretSantaDrawing:
+        self.name = clean_santa_name(self.name)
+        self.participant_ids = list(
+            dict.fromkeys(int(value) for value in self.participant_ids)
+        )
+        participant_set = set(self.participant_ids)
+        self.assignments = {
+            int(giver_id): int(giftee_id)
+            for giver_id, giftee_id in self.assignments.items()
+            if int(giver_id) in participant_set and int(giftee_id) in participant_set
+        }
+        if not self.closed:
+            self.assignments = {}
+        return self
+
+
+@dataclass
 class GuildState:
     command_channel_id: int | None = None
+    santa_channel_id: int | None = None
     rotation_channel_ids: list[int] = field(default_factory=list)
     candidate_names: list[str] = field(default_factory=list)
+    santa_drawings: dict[str, SecretSantaDrawing] = field(default_factory=dict)
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES
     rotation_mode: str = ROTATION_MODE_ONE
     list_mode: str = LIST_MODE_RANDOM
@@ -37,8 +80,13 @@ class GuildState:
         list_mode = str(payload.get("list_mode", LIST_MODE_RANDOM))
         return cls(
             command_channel_id=_optional_int(payload.get("command_channel_id")),
+            santa_channel_id=_optional_int(payload.get("santa_channel_id")),
             rotation_channel_ids=[int(value) for value in payload.get("rotation_channel_ids", [])],
             candidate_names=[str(value) for value in payload.get("candidate_names", [])],
+            santa_drawings={
+                clean_santa_key(name): SecretSantaDrawing.from_dict(drawing, name)
+                for name, drawing in payload.get("santa_drawings", {}).items()
+            },
             interval_minutes=max(interval, MIN_INTERVAL_MINUTES),
             rotation_mode=rotation_mode,
             list_mode=list_mode,
@@ -51,6 +99,10 @@ class GuildState:
     def normalized(self) -> GuildState:
         self.rotation_channel_ids = list(dict.fromkeys(self.rotation_channel_ids))
         self.candidate_names = list(dict.fromkeys(self.candidate_names))
+        self.santa_drawings = {
+            clean_santa_key(drawing.name): drawing.normalized()
+            for drawing in self.santa_drawings.values()
+        }
         self.interval_minutes = max(int(self.interval_minutes), MIN_INTERVAL_MINUTES)
         if self.rotation_mode not in ROTATION_MODES:
             self.rotation_mode = ROTATION_MODE_ONE
@@ -124,6 +176,17 @@ def clean_candidate_name(name: str) -> str:
     if not 1 <= len(cleaned) <= 100:
         raise ValueError("Candidate names must be 1 to 100 characters long.")
     return cleaned
+
+
+def clean_santa_name(name: str) -> str:
+    cleaned = " ".join(name.strip().split())
+    if not 1 <= len(cleaned) <= 80:
+        raise ValueError("Secret Santa names must be 1 to 80 characters long.")
+    return cleaned
+
+
+def clean_santa_key(name: str) -> str:
+    return clean_santa_name(name).casefold()
 
 
 def _optional_int(value: Any) -> int | None:
