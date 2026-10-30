@@ -1,6 +1,12 @@
 import unittest
 from unittest.mock import patch
 
+from remchannelbot.bot import (
+    candidate_key,
+    next_candidate_name,
+    normalize_text_channel_name,
+)
+from remchannelbot.santa import assign_secret_santa
 from remchannelbot.state import (
     DEFAULT_INTERVAL_MINUTES,
     LIST_MODE_EXHAUSTIVE,
@@ -12,12 +18,6 @@ from remchannelbot.state import (
     clean_candidate_name,
     clean_santa_key,
     clean_santa_name,
-)
-from remchannelbot.bot import (
-    assign_secret_santa,
-    candidate_key,
-    next_candidate_name,
-    normalize_text_channel_name,
 )
 
 
@@ -110,7 +110,7 @@ class StateTests(unittest.TestCase):
             name="Family",
             creator_id=10,
             participant_ids=[10, 20],
-            closed=False,
+            state="Open",
             assignments={10: 20},
         ).normalized()
 

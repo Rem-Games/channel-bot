@@ -5,20 +5,30 @@ import io
 import logging
 import random
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Callable
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from .config import load_config
+from .santa import (
+    close_santa_drawing,
+    complete_santa_drawing,
+    drawing_sort_key,
+    timestamp,
+)
+from .santa_views import SantaConversation
 from .state import (
     LIST_MODE_EXHAUSTIVE,
     LIST_MODE_RANDOM,
     MIN_INTERVAL_MINUTES,
     ROTATION_MODE_ALL,
     ROTATION_MODE_ONE,
+    SANTA_CLOSED,
+    SANTA_COMPLETED,
+    SANTA_OPEN,
     SecretSantaDrawing,
     StateStore,
     clean_candidate_name,
@@ -28,7 +38,9 @@ from .state import (
 
 LOGGER = logging.getLogger(__name__)
 NAMES_PER_PAGE = 20
-RenameableChannel = discord.TextChannel | discord.VoiceChannel | discord.StageChannel | discord.ForumChannel
+RenameableChannel = (
+    discord.TextChannel | discord.VoiceChannel | discord.StageChannel | discord.ForumChannel
+)
 
 
 class RemChannelBot(commands.Bot):
@@ -162,8 +174,12 @@ class RemChannelGroup(app_commands.Group):
             f"Rotation interval set to {state.interval_minutes} minutes."
         )
 
-    @app_commands.command(name="mode", description="Set whether rotations update one channel or all channels")
-    @app_commands.describe(mode="Use one for the default one-channel rotation or all to update every channel")
+    @app_commands.command(
+        name="mode", description="Set whether rotations update one channel or all channels"
+    )
+    @app_commands.describe(
+        mode="Use one for the default one-channel rotation or all to update every channel"
+    )
     @app_commands.choices(
         mode=[
             app_commands.Choice(name="one channel", value=ROTATION_MODE_ONE),
@@ -228,7 +244,9 @@ class RemChannelGroup(app_commands.Group):
             channel = interaction.guild.get_channel(channel_id)
             name = channel.name if channel else "missing"
             lines.append(f"- {name} (`{channel_id}`)")
-        await interaction.response.send_message("\n".join(lines) if lines else "No channels configured.")
+        await interaction.response.send_message(
+            "\n".join(lines) if lines else "No channels configured."
+        )
 
     @app_commands.command(name="rotation-add", description="Add a channel to the rotation")
     @app_commands.describe(channel="Channel to rename during rotation")
@@ -246,9 +264,13 @@ class RemChannelGroup(app_commands.Group):
             return
         state.rotation_channel_ids.append(channel.id)
         self.bot.store.update_guild(interaction.guild_id, state)
-        await interaction.response.send_message(f"Added {format_channel(channel)} (`{channel.id}`).")
+        await interaction.response.send_message(
+            f"Added {format_channel(channel)} (`{channel.id}`)."
+        )
 
-    @app_commands.command(name="rotation-remove", description="Remove a channel by channel, ID, or unique name")
+    @app_commands.command(
+        name="rotation-remove", description="Remove a channel by channel, ID, or unique name"
+    )
     @app_commands.describe(channel="Channel mention, channel ID, or unique current channel name")
     @app_commands.default_permissions(administrator=True)
     async def rotation_remove(self, interaction: discord.Interaction, channel: str) -> None:
@@ -259,9 +281,13 @@ class RemChannelGroup(app_commands.Group):
                 "No unique configured channel matched that input.", ephemeral=True
             )
             return
-        state.rotation_channel_ids = [value for value in state.rotation_channel_ids if value != channel_id]
+        state.rotation_channel_ids = [
+            value for value in state.rotation_channel_ids if value != channel_id
+        ]
         self.bot.store.update_guild(interaction.guild_id, state)
-        await interaction.response.send_message(f"Removed channel `{channel_id}` from the rotation.")
+        await interaction.response.send_message(
+            f"Removed channel `{channel_id}` from the rotation."
+        )
 
     @app_commands.command(name="names-list", description="List candidate channel names")
     @app_commands.describe(page="Page number", export="Attach the full list as a text file")
@@ -317,20 +343,25 @@ class RemChannelGroup(app_commands.Group):
         except ValueError:
             cleaned = name.strip()
         if cleaned not in state.candidate_names:
-            await interaction.response.send_message("That candidate name was not found.", ephemeral=True)
+            await interaction.response.send_message(
+                "That candidate name was not found.", ephemeral=True
+            )
             return
         state.candidate_names.remove(cleaned)
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message(f"Removed candidate name: `{cleaned}`.")
 
-    @app_commands.command(name="rotate-now", description="Rotate the next configured channel immediately")
+    @app_commands.command(
+        name="rotate-now", description="Rotate the next configured channel immediately"
+    )
     @app_commands.default_permissions(administrator=True)
     async def rotate_now(self, interaction: discord.Interaction) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
         changes = await rotate_channels(interaction.guild, state, reason="manual rotation")
         if not changes:
             await interaction.response.send_message(
-                "No channels could be rotated. Rotation needs configured channels, candidate names, "
+                "No channels could be rotated. Rotation needs configured channels, "
+                "candidate names, "
                 "and at least one candidate name that is not already in use.",
                 ephemeral=True,
             )
@@ -378,6 +409,7 @@ class SantaDeleteConfirm(discord.ui.View):
         self.guild_id = guild_id
         self.drawing_key = drawing_key
         self.requester_id = requester_id
+        self.drawing_id = bot.store.get_guild(guild_id).santa_drawings[drawing_key].drawing_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.requester_id:
@@ -394,13 +426,19 @@ class SantaDeleteConfirm(discord.ui.View):
         _button: discord.ui.Button,
     ) -> None:
         state = self.bot.store.get_guild(self.guild_id)
-        drawing = state.santa_drawings.pop(self.drawing_key, None)
-        if drawing is None:
+        drawing = state.santa_drawings.get(self.drawing_key)
+        if drawing is None or drawing.drawing_id != self.drawing_id:
             await interaction.response.edit_message(
                 content="That drawing was already deleted.",
                 view=None,
             )
             return
+        if not can_manage_santa(interaction.user, drawing):
+            await interaction.response.send_message(
+                "Only the drawing creator or server admins can delete that drawing.", ephemeral=True
+            )
+            return
+        del state.santa_drawings[self.drawing_key]
         self.bot.store.update_guild(self.guild_id, state)
         await interaction.response.edit_message(
             content=f"Deleted Secret Santa drawing `{drawing.name}`.", view=None
@@ -446,6 +484,120 @@ class SantaGroup(app_commands.Group):
             return False
         return True
 
+    @staticmethod
+    def command_state(command: str) -> str | None:
+        if command == "delete":
+            return None
+        if command in {"giftee", "completed"}:
+            return SANTA_CLOSED
+        if command == "details":
+            return SANTA_COMPLETED
+        return SANTA_OPEN
+
+    @staticmethod
+    def can_manage(interaction, drawing) -> bool:
+        return can_manage_santa(interaction.user, drawing)
+
+    def state_choices(self, interaction, command):
+        state = self.bot.store.get_guild(interaction.guild_id)
+        required = self.command_state(command)
+        return sorted(
+            (d for d in state.santa_drawings.values() if required is None or d.state == required),
+            key=drawing_sort_key,
+        )
+
+    def command_choices(self, interaction, command):
+        choices = self.state_choices(interaction, command)
+        if len(choices) == 1:
+            return choices
+        if command in {"delete", "close", "completed", "exclusion", "exclusion-remove"}:
+            return [d for d in choices if self.can_manage(interaction, d)]
+        if command == "join":
+            return [d for d in choices if interaction.user.id not in d.participant_ids]
+        if command in {"leave", "giftee"}:
+            return [d for d in choices if interaction.user.id in d.participant_ids]
+        return choices
+
+    def no_choices_message(self, interaction, command):
+        choices = self.state_choices(interaction, command)
+        if choices and command == "join":
+            return "You have joined all Open drawings."
+        if choices and command == "leave":
+            return "You are not in any Open drawings."
+        if choices and command == "giftee":
+            return "You are not in any Closed drawings."
+        required = self.command_state(command)
+        state_text = f"{required} " if required else ""
+        return f"No eligible {state_text}drawings are available for `/santa {command}`."
+
+    async def resolve_drawing(self, interaction, name, command):
+        if name is not None:
+            state = self.bot.store.get_guild(interaction.guild_id)
+            key, drawing = find_santa_drawing(state, name)
+            if drawing is None:
+                await interaction.response.send_message(
+                    "That Secret Santa drawing was not found.", ephemeral=True
+                )
+            return key, drawing
+        choices = self.command_choices(interaction, command)
+        if len(choices) == 1:
+            return clean_santa_key(choices[0].name), choices[0]
+        if not choices:
+            await interaction.response.send_message(
+                self.no_choices_message(interaction, command), ephemeral=True
+            )
+        else:
+            await SantaConversation(self, interaction, command).send(interaction)
+        return None, None
+
+    @app_commands.command(name="completed", description="Mark a Closed drawing as Completed")
+    @app_commands.describe(name="Drawing name; omit to choose a Closed drawing")
+    async def completed(self, interaction: discord.Interaction, name: str | None = None) -> None:
+        _key, drawing = await self.resolve_drawing(interaction, name, "completed")
+        if drawing is None:
+            return
+        if not self.can_manage(interaction, drawing):
+            await interaction.response.send_message(
+                "Only the drawing creator or server admins can complete that drawing.",
+                ephemeral=True,
+            )
+            return
+        if drawing.state != SANTA_CLOSED:
+            await interaction.response.send_message(
+                "Only Closed drawings can be marked Completed.", ephemeral=True
+            )
+            return
+        complete_santa_drawing(drawing)
+        state = self.bot.store.get_guild(interaction.guild_id)
+        self.bot.store.update_guild(interaction.guild_id, state)
+        await interaction.response.send_message(f"`{drawing.name}` is Completed.")
+
+    @app_commands.command(
+        name="details", description="Privately show a Completed drawing's results"
+    )
+    @app_commands.describe(name="Drawing name; omit to choose a Completed drawing")
+    async def details(self, interaction: discord.Interaction, name: str | None = None) -> None:
+        _key, drawing = await self.resolve_drawing(interaction, name, "details")
+        if drawing is not None:
+            await SantaConversation(self, interaction, "details", drawing).send(interaction)
+
+    @app_commands.command(name="exclusion", description="Exclude pairings from Completed drawings")
+    @app_commands.describe(name="Drawing name; omit to choose an Open drawing")
+    async def exclusion(self, interaction: discord.Interaction, name: str | None = None) -> None:
+        _key, drawing = await self.resolve_drawing(interaction, name, "exclusion")
+        if drawing is not None:
+            await SantaConversation(self, interaction, "exclusion", drawing).send(interaction)
+
+    @app_commands.command(name="exclusion-remove", description="Remove a drawing's exclusions")
+    @app_commands.describe(name="Drawing name; omit to choose an Open drawing")
+    async def exclusion_remove(
+        self, interaction: discord.Interaction, name: str | None = None
+    ) -> None:
+        _key, drawing = await self.resolve_drawing(interaction, name, "exclusion-remove")
+        if drawing is not None:
+            view = SantaConversation(self, interaction, "exclusion-remove", drawing)
+            await view.send(interaction)
+
     @app_commands.command(name="create", description="Create a Secret Santa drawing")
     @app_commands.describe(name="Name for this drawing")
     async def create(self, interaction: discord.Interaction, name: str) -> None:
@@ -465,20 +617,16 @@ class SantaGroup(app_commands.Group):
         state.santa_drawings[drawing_key] = SecretSantaDrawing(
             name=drawing_name,
             creator_id=interaction.user.id,
+            created_at=timestamp(),
         )
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message(f"Created Secret Santa drawing `{drawing_name}`.")
 
     @app_commands.command(name="delete", description="Delete a Secret Santa drawing")
     @app_commands.describe(name="Name of the drawing to delete")
-    async def delete(self, interaction: discord.Interaction, name: str) -> None:
-        state = self.bot.store.get_guild(interaction.guild_id)
-        drawing_key, drawing = find_santa_drawing(state, name)
+    async def delete(self, interaction: discord.Interaction, name: str | None = None) -> None:
+        drawing_key, drawing = await self.resolve_drawing(interaction, name, "delete")
         if drawing is None:
-            await interaction.response.send_message(
-                "That Secret Santa drawing was not found.",
-                ephemeral=True,
-            )
             return
         if not can_manage_santa(interaction.user, drawing):
             await interaction.response.send_message(
@@ -501,18 +649,14 @@ class SantaGroup(app_commands.Group):
 
     @app_commands.command(name="join", description="Join a Secret Santa drawing")
     @app_commands.describe(name="Name of the drawing to join")
-    async def join(self, interaction: discord.Interaction, name: str) -> None:
+    async def join(self, interaction: discord.Interaction, name: str | None = None) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        _drawing_key, drawing = find_santa_drawing(state, name)
+        _drawing_key, drawing = await self.resolve_drawing(interaction, name, "join")
         if drawing is None:
-            await interaction.response.send_message(
-                "That Secret Santa drawing was not found.",
-                ephemeral=True,
-            )
             return
-        if drawing.closed:
+        if drawing.state != SANTA_OPEN:
             await interaction.response.send_message(
-                "That drawing is already closed.",
+                "Only Open drawings can be joined.",
                 ephemeral=True,
             )
             return
@@ -532,18 +676,14 @@ class SantaGroup(app_commands.Group):
 
     @app_commands.command(name="leave", description="Leave a Secret Santa drawing")
     @app_commands.describe(name="Name of the drawing to leave")
-    async def leave(self, interaction: discord.Interaction, name: str) -> None:
+    async def leave(self, interaction: discord.Interaction, name: str | None = None) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        _drawing_key, drawing = find_santa_drawing(state, name)
+        _drawing_key, drawing = await self.resolve_drawing(interaction, name, "leave")
         if drawing is None:
-            await interaction.response.send_message(
-                "That Secret Santa drawing was not found.",
-                ephemeral=True,
-            )
             return
-        if drawing.closed:
+        if drawing.state != SANTA_OPEN:
             await interaction.response.send_message(
-                "That drawing is already closed. Ask the creator or an admin to remove you.",
+                "You can only leave Open drawings. Admins can remove users from Closed drawings.",
                 ephemeral=True,
             )
             return
@@ -565,14 +705,10 @@ class SantaGroup(app_commands.Group):
 
     @app_commands.command(name="close", description="Close a drawing and assign giftees")
     @app_commands.describe(name="Name of the drawing to close")
-    async def close(self, interaction: discord.Interaction, name: str) -> None:
+    async def close(self, interaction: discord.Interaction, name: str | None = None) -> None:
         state = self.bot.store.get_guild(interaction.guild_id)
-        _drawing_key, drawing = find_santa_drawing(state, name)
+        _drawing_key, drawing = await self.resolve_drawing(interaction, name, "close")
         if drawing is None:
-            await interaction.response.send_message(
-                "That Secret Santa drawing was not found.",
-                ephemeral=True,
-            )
             return
         if not can_manage_santa(interaction.user, drawing):
             await interaction.response.send_message(
@@ -580,9 +716,9 @@ class SantaGroup(app_commands.Group):
                 ephemeral=True,
             )
             return
-        if drawing.closed:
+        if drawing.state != SANTA_OPEN:
             await interaction.response.send_message(
-                f"`{drawing.name}` is already closed.",
+                "Only Open drawings can be closed.",
                 ephemeral=True,
             )
             return
@@ -593,10 +729,11 @@ class SantaGroup(app_commands.Group):
             )
             return
 
-        close_santa_drawing(drawing)
+        relaxed = close_santa_drawing(drawing)
         self.bot.store.update_guild(interaction.guild_id, state)
         await interaction.response.send_message(
             f"`{drawing.name}` is closed. Participants can run `/santa giftee {drawing.name}`."
+            + exclusion_result(drawing, relaxed)
         )
 
     @app_commands.command(name="admin-leave", description="Forcibly remove a user from a drawing")
@@ -623,12 +760,17 @@ class SantaGroup(app_commands.Group):
                 ephemeral=True,
             )
             return
+        if drawing.state == SANTA_COMPLETED:
+            await interaction.response.send_message(
+                "Participants cannot be removed from Completed drawings.", ephemeral=True
+            )
+            return
         if member.id not in drawing.participant_ids:
             await interaction.response.send_message(
                 f"{member.mention} is not in `{drawing.name}`.", ephemeral=True
             )
             return
-        if drawing.closed and len(drawing.participant_ids) <= 2:
+        if drawing.state == SANTA_CLOSED and len(drawing.participant_ids) <= 2:
             await interaction.response.send_message(
                 "Cannot remove that user from a closed drawing because at least 2 "
                 "participants are required.",
@@ -640,27 +782,26 @@ class SantaGroup(app_commands.Group):
             user_id for user_id in drawing.participant_ids if user_id != member.id
         ]
         reassigned = False
-        if drawing.closed:
-            close_santa_drawing(drawing)
+        relaxed = []
+        if drawing.state != SANTA_OPEN:
+            relaxed = close_santa_drawing(drawing)
             reassigned = True
         self.bot.store.update_guild(interaction.guild_id, state)
-        suffix = " Assignments were redrawn." if reassigned else ""
+        suffix = (
+            " Assignments were redrawn." + exclusion_result(drawing, relaxed)
+            if reassigned else ""
+        )
         await interaction.response.send_message(
             f"Removed {member.mention} from `{drawing.name}`.{suffix}"
         )
 
     @app_commands.command(name="giftee", description="Privately show who you drew")
     @app_commands.describe(name="Name of the drawing")
-    async def giftee(self, interaction: discord.Interaction, name: str) -> None:
-        state = self.bot.store.get_guild(interaction.guild_id)
-        _drawing_key, drawing = find_santa_drawing(state, name)
+    async def giftee(self, interaction: discord.Interaction, name: str | None = None) -> None:
+        _drawing_key, drawing = await self.resolve_drawing(interaction, name, "giftee")
         if drawing is None:
-            await interaction.response.send_message(
-                "That Secret Santa drawing was not found.",
-                ephemeral=True,
-            )
             return
-        if not drawing.closed:
+        if drawing.state == SANTA_OPEN:
             await interaction.response.send_message(
                 "That drawing has not been closed yet.",
                 ephemeral=True,
@@ -679,6 +820,18 @@ class SantaGroup(app_commands.Group):
         )
 
 
+def exclusion_result(drawing, relaxed: list[str]) -> str:
+    if not drawing.exclusions:
+        return ""
+    if not relaxed:
+        return " All exclusions were respected."
+    names = ", ".join(discord.utils.escape_markdown(name) for name in relaxed)
+    return (
+        " We tried our best to avoid repeats. To make a valid drawing, exclusions "
+        f"were relaxed oldest-first: {names}."
+    )
+
+
 def find_santa_drawing(state, name: str) -> tuple[str | None, SecretSantaDrawing | None]:
     try:
         drawing_key = clean_santa_key(name)
@@ -692,32 +845,6 @@ def can_manage_santa(member: discord.Member, drawing: SecretSantaDrawing) -> boo
     return member.id == drawing.creator_id or is_admin(member)
 
 
-def close_santa_drawing(drawing: SecretSantaDrawing) -> None:
-    drawing.assignments = assign_secret_santa(drawing.participant_ids)
-    drawing.closed = True
-
-
-def assign_secret_santa(participant_ids: list[int]) -> dict[int, int]:
-    participants = list(dict.fromkeys(participant_ids))
-    if len(participants) < 2:
-        raise ValueError("Secret Santa drawings need at least 2 participants.")
-
-    for _attempt in range(100):
-        giftees = participants[:]
-        random.shuffle(giftees)
-        has_self_assignment = any(
-            giver_id == giftee_id
-            for giver_id, giftee_id in zip(participants, giftees, strict=True)
-        )
-        if not has_self_assignment:
-            return dict(zip(participants, giftees, strict=True))
-
-    ordered = participants[:]
-    random.shuffle(ordered)
-    rotated = ordered[1:] + ordered[:1]
-    return dict(zip(ordered, rotated, strict=True))
-
-
 def format_user(guild: discord.Guild, user_id: int) -> str:
     member = guild.get_member(user_id)
     return member.mention if member else f"<@{user_id}>"
@@ -727,7 +854,9 @@ def is_admin(member: discord.Member) -> bool:
     return member.guild.owner_id == member.id or member.guild_permissions.administrator
 
 
-def resolve_channel_id(guild: discord.Guild, value: str, allowed_channel_ids: list[int]) -> int | None:
+def resolve_channel_id(
+    guild: discord.Guild, value: str, allowed_channel_ids: list[int]
+) -> int | None:
     raw = value.strip()
     if raw.startswith("<#") and raw.endswith(">"):
         raw = raw[2:-1]
@@ -775,7 +904,9 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
             state,
             channel.name,
             current_keys - {candidate_key(channel.name)},
-            name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
+            name_transform=lambda candidate, channel=channel: candidate_name_for_channel(
+                channel, candidate
+            ),
         )
         if name is None:
             continue
@@ -784,7 +915,9 @@ async def rotate_next_channel(guild: discord.Guild, state, reason: str) -> str |
         try:
             await channel.edit(name=name, reason=reason)
         except discord.Forbidden:
-            LOGGER.warning("Missing permissions to rename channel %s in guild %s", channel_id, guild.id)
+            LOGGER.warning(
+                "Missing permissions to rename channel %s in guild %s", channel_id, guild.id
+            )
             return f"Missing permissions to rename `{old_name}` (`{channel_id}`)."
         except discord.HTTPException as exc:
             LOGGER.warning("Failed to rename channel %s in guild %s: %s", channel_id, guild.id, exc)
@@ -812,7 +945,9 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
             state,
             channel.name,
             reserved_keys - {candidate_key(channel.name)},
-            name_transform=lambda candidate: candidate_name_for_channel(channel, candidate),
+            name_transform=lambda candidate, channel=channel: candidate_name_for_channel(
+                channel, candidate
+            ),
         )
         if name is None:
             continue
@@ -828,7 +963,9 @@ async def rotate_all_channels(guild: discord.Guild, state, reason: str) -> list[
         try:
             await channel.edit(name=name, reason=reason)
         except discord.Forbidden:
-            LOGGER.warning("Missing permissions to rename channel %s in guild %s", channel.id, guild.id)
+            LOGGER.warning(
+                "Missing permissions to rename channel %s in guild %s", channel.id, guild.id
+            )
             changes.append(f"Missing permissions to rename `{old_name}` (`{channel.id}`).")
         except discord.HTTPException as exc:
             LOGGER.warning("Failed to rename channel %s in guild %s: %s", channel.id, guild.id, exc)

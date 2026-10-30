@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 
 MIN_INTERVAL_MINUTES = 10
 DEFAULT_INTERVAL_MINUTES = 60
@@ -15,6 +16,26 @@ ROTATION_MODES = {ROTATION_MODE_ONE, ROTATION_MODE_ALL}
 LIST_MODE_RANDOM = "random"
 LIST_MODE_EXHAUSTIVE = "exhaustive"
 LIST_MODES = {LIST_MODE_RANDOM, LIST_MODE_EXHAUSTIVE}
+SANTA_OPEN = "Open"
+SANTA_CLOSED = "Closed"
+SANTA_COMPLETED = "Completed"
+
+
+@dataclass
+class SantaExclusion:
+    drawing_id: str
+    name: str
+    completed_at: int | None
+    assignments: dict[int, int]
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> SantaExclusion:
+        return cls(
+            drawing_id=str(payload["drawing_id"]),
+            name=str(payload["name"]),
+            completed_at=_optional_int(payload.get("completed_at")),
+            assignments={int(k): int(v) for k, v in payload["assignments"].items()},
+        )
 
 
 @dataclass
@@ -22,8 +43,13 @@ class SecretSantaDrawing:
     name: str
     creator_id: int
     participant_ids: list[int] = field(default_factory=list)
-    closed: bool = False
+    state: str = SANTA_OPEN
     assignments: dict[int, int] = field(default_factory=dict)
+    drawing_id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: int | None = None
+    closed_at: int | None = None
+    completed_at: int | None = None
+    exclusions: list[SantaExclusion] = field(default_factory=list)
 
     @classmethod
     def from_dict(
@@ -35,7 +61,12 @@ class SecretSantaDrawing:
             name=clean_santa_name(str(payload.get("name") or fallback_name)),
             creator_id=int(payload.get("creator_id", 0)),
             participant_ids=[int(value) for value in payload.get("participant_ids", [])],
-            closed=bool(payload.get("closed", False)),
+            state=str(payload.get("state", SANTA_CLOSED if payload.get("closed") else SANTA_OPEN)),
+            drawing_id=str(payload.get("drawing_id") or uuid4().hex),
+            created_at=_optional_int(payload.get("created_at")),
+            closed_at=_optional_int(payload.get("closed_at")),
+            completed_at=_optional_int(payload.get("completed_at")),
+            exclusions=[SantaExclusion.from_dict(item) for item in payload.get("exclusions", [])],
             assignments={
                 int(giver_id): int(giftee_id)
                 for giver_id, giftee_id in payload.get("assignments", {}).items()
@@ -53,7 +84,9 @@ class SecretSantaDrawing:
             for giver_id, giftee_id in self.assignments.items()
             if int(giver_id) in participant_set and int(giftee_id) in participant_set
         }
-        if not self.closed:
+        if self.state not in {SANTA_OPEN, SANTA_CLOSED, SANTA_COMPLETED}:
+            raise ValueError("Unknown Secret Santa drawing state.")
+        if self.state == SANTA_OPEN:
             self.assignments = {}
         return self
 
